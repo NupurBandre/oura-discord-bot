@@ -255,7 +255,7 @@ async def check_now(ctx):
     
     for retailer, prices in by_retailer.items():
         price_text = '\n'.join([
-            f"**{p['color'].title()}**: ${p['price']:.2f}"
+            f"**{p['color'].title()}**: ${p['price']:.2f} - [Link]({p['url']})"
             for p in prices
         ])
         embed.add_field(name=f'🏪 {retailer}', value=price_text, inline=False)
@@ -263,8 +263,9 @@ async def check_now(ctx):
     # Find lowest price
     lowest = min(results, key=lambda x: x['price'])
     embed.add_field(
-        name='🏆 Best Price',
-        value=f"${lowest['price']:.2f} - {lowest['retailer']} ({lowest['color'].title()})",
+        name='🏆 Lowest Price',
+        value=f"**${lowest['price']:.2f}** - {lowest['retailer']} ({lowest['color'].title()})\n"
+              f"[🛒 Buy Now]({lowest['url']})",
         inline=False
     )
     
@@ -408,16 +409,22 @@ async def price_check_loop():
     # Save to history
     tracker.price_history.extend(results)
     
+    # Find the LOWEST price across ALL retailers and colors
+    lowest_price_item = min(results, key=lambda x: x['price'])
+    lowest_price = lowest_price_item['price']
+    
     # Check for prices below target
     target_price = config.get('target_price')
     deals = [r for r in results if r['price'] <= target_price]
     
-    if deals:
-        # Send alert
-        channel_id = config.get('alert_channel_id')
-        if channel_id:
-            channel = bot.get_channel(channel_id)
-            if channel:
+    # Send update to channel
+    channel_id = config.get('alert_channel_id')
+    if channel_id:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            # If there are deals below target, send alert
+            if deals:
+                # Send individual alerts for each deal
                 for deal in deals:
                     embed = discord.Embed(
                         title='🚨 PRICE ALERT! 🚨',
@@ -428,11 +435,74 @@ async def price_check_loop():
                     embed.add_field(name='Color', value=deal['color'].title(), inline=True)
                     embed.add_field(name='Price', value=f"${deal['price']:.2f}", inline=True)
                     embed.add_field(name='Your Target', value=f"${target_price:.2f}", inline=True)
-                    embed.add_field(name='Link', value=f"[Buy Now]({deal['url']})", inline=False)
+                    embed.add_field(name='🔗 Buy Now', value=f"[Click Here]({deal['url']})", inline=False)
                     embed.set_footer(text=f"Checked at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                     
                     await channel.send(embed=embed)
-                    await channel.send(f"@everyone 🔔 Great deal on Oura Ring 4!")
+                
+                # Send summary with lowest price
+                summary_embed = discord.Embed(
+                    title='💰 Best Price This Hour',
+                    description=f"**Lowest price found: ${lowest_price:.2f}**",
+                    color=discord.Color.gold()
+                )
+                summary_embed.add_field(
+                    name='🏆 Best Deal',
+                    value=f"**{lowest_price_item['retailer']}** - {lowest_price_item['color'].title()}\n"
+                          f"${lowest_price_item['price']:.2f}\n"
+                          f"[🛒 Buy Now]({lowest_price_item['url']})",
+                    inline=False
+                )
+                
+                # Add all other prices found
+                if len(results) > 1:
+                    other_prices = '\n'.join([
+                        f"• **{r['retailer']}** ({r['color'].title()}): ${r['price']:.2f} - [Link]({r['url']})"
+                        for r in sorted(results, key=lambda x: x['price'])
+                        if r != lowest_price_item
+                    ][:5])  # Show top 5 other prices
+                    
+                    if other_prices:
+                        summary_embed.add_field(
+                            name='📊 Other Prices',
+                            value=other_prices,
+                            inline=False
+                        )
+                
+                await channel.send(embed=summary_embed)
+                await channel.send(f"@everyone 🔔 Great deal on Oura Ring 4!")
+            
+            # Even if no deals, send hourly summary with lowest price
+            else:
+                summary_embed = discord.Embed(
+                    title='📊 Hourly Price Check',
+                    description=f"No prices below your target of ${target_price:.2f} yet",
+                    color=discord.Color.blue()
+                )
+                summary_embed.add_field(
+                    name='🏆 Lowest Price Found',
+                    value=f"**{lowest_price_item['retailer']}** - {lowest_price_item['color'].title()}\n"
+                          f"${lowest_price_item['price']:.2f}\n"
+                          f"[🛒 View Deal]({lowest_price_item['url']})",
+                    inline=False
+                )
+                
+                # Show all prices
+                all_prices = '\n'.join([
+                    f"• **{r['retailer']}** ({r['color'].title()}): ${r['price']:.2f} - [Link]({r['url']})"
+                    for r in sorted(results, key=lambda x: x['price'])[:5]
+                ])
+                
+                if all_prices:
+                    summary_embed.add_field(
+                        name='💵 All Prices This Hour',
+                        value=all_prices,
+                        inline=False
+                    )
+                
+                summary_embed.set_footer(text=f"Checked at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                await channel.send(embed=summary_embed)
 
 
 @price_check_loop.before_loop
